@@ -1,9 +1,6 @@
-import React, { Suspense, useRef, useEffect, useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { Camera, Users, Brain, ArrowRight, Shield, Clock, CheckCircle, Eye, Cpu, Zap, Database } from 'lucide-react';
-import { Canvas, useFrame } from '@react-three/fiber';
-import { OrbitControls, useGLTF, SpotLight, PerspectiveCamera, Environment, Float } from '@react-three/drei';
-import * as THREE from 'three';
 import Footer from '../components/Footer';
 
 // Header Component
@@ -34,100 +31,7 @@ const Header = () => {
   );
 };
 
-// Robotic Eye Model - Fixed with proper error handling and fallback
-function RoboticEye() {
-  const group = useRef();
-  // Need to handle model loading properly
-  const [modelError, setModelError] = useState(false);
-  
-  // Using try/catch to handle potential model loading issues
-  let eyeModel;
-  try {
-    eyeModel = useGLTF("/robotic_eye.glb");
-  } catch (error) {
-    console.error("Error loading model:", error);
-    setModelError(true);
-  }
-  
-  useFrame((state) => {
-    if (group.current) {
-      const t = state.clock.getElapsedTime();
-      group.current.rotation.y = Math.sin(t / 2) * 0.5;
-      group.current.rotation.x = Math.sin(t / 4) * 0.3;
-    }
-  });
-
-  // Fallback rendering if model fails to load
-  if (modelError) {
-    return (
-      <Float speed={1.5} rotationIntensity={0.5} floatIntensity={0.5}>
-        <mesh>
-          <sphereGeometry args={[1.5, 32, 32]} />
-          <meshStandardMaterial color="#4c6ef5" emissive="#0033ff" emissiveIntensity={0.5} roughness={0.2} />
-        </mesh>
-        <mesh position={[0, 0, 1.5]}>
-          <sphereGeometry args={[0.5, 32, 32]} />
-          <meshStandardMaterial color="#00aaff" emissive="#00aaff" emissiveIntensity={0.8} />
-        </mesh>
-      </Float>
-    );
-  }
-
-  return (
-    <group ref={group}>
-      {eyeModel && <primitive object={eyeModel.scene} scale={32} position={[0, -1, 0]} />}
-    </group>
-  );
-}
-
-// Preload the model to prevent issues
-useGLTF.preload("/robotic_eye.glb");
-
-// Enhanced Animated Background with better performance
-function AnimatedBackground() {
-  const mesh = useRef();
-  const [particles, setParticles] = useState([]);
-  
-  useEffect(() => {
-    const newParticles = Array.from({ length: 150 }, () => ({
-      x: (Math.random() - 0.5) * 30,
-      y: (Math.random() - 0.5) * 30,
-      z: (Math.random() - 0.5) * 30,
-      size: Math.random() * 0.3 + 0.05,
-      speed: Math.random() * 0.02 + 0.01,
-      offsetY: Math.random() * Math.PI * 2,
-      color: new THREE.Color().setHSL(0.6 + Math.random() * 0.1, 0.8, 0.6)
-    }));
-    setParticles(newParticles);
-  }, []);
-
-  useFrame((state) => {
-    const t = state.clock.getElapsedTime();
-    mesh.current.rotation.y = t * 0.05;
-    mesh.current.rotation.x = Math.sin(t * 0.025) * 0.1;
-  });
-
-  return (
-    <group ref={mesh}>
-      {particles.map((particle, index) => (
-        <mesh 
-          key={index} 
-          position={[particle.x, particle.y, particle.z]}
-        >
-          <sphereGeometry args={[particle.size, 8, 8]} />
-          <meshStandardMaterial 
-            color={particle.color} 
-            emissive={particle.color} 
-            emissiveIntensity={0.8} 
-            toneMapped={false}
-          />
-        </mesh>
-      ))}
-    </group>
-  );
-}
-
-// Feature Card Component - Enhanced with animation
+// Feature Card Component
 const FeatureCard = ({ icon: Icon, title, description }) => {
   return (
     <div className="p-6 bg-white/5 backdrop-blur-md rounded-xl border border-white/10 hover:bg-white/10 transition-all duration-300 hover:scale-105 hover:shadow-lg hover:shadow-blue-500/20">
@@ -155,7 +59,7 @@ const GlowingButton = ({ to, children, primary = false }) => {
         {children}
         <ArrowRight className="w-5 h-5 ml-2 transform group-hover:translate-x-1 transition-transform" />
       </span>
-      <span className={`absolute inset-0 bg-gradient-to-r from-blue-400 to-purple-500 opacity-0 group-hover:opacity-100 transition-opacity duration-300 blur-xl`} />
+      <span className="absolute inset-0 bg-gradient-to-r from-blue-400 to-purple-500 opacity-0 group-hover:opacity-100 transition-opacity duration-300 blur-xl" />
       <span className="absolute inset-0 bg-gradient-to-r from-blue-400 to-purple-500 opacity-0 group-hover:opacity-20 transition-opacity duration-300" />
     </Link>
   );
@@ -186,22 +90,10 @@ export default function Home() {
     <div className={`min-h-screen bg-black text-white overflow-hidden transition-opacity duration-1000 ${isLoaded ? 'opacity-100' : 'opacity-0'}`}>
       <Header />  
      
-      
-      {/* Hero Section with parallax effect */}
+      {/* Hero Section with static background */}
       <section className="h-screen relative flex items-center" id="home">
         <div className="absolute inset-0 z-0">
           <div className="w-full h-full bg-gradient-to-b from-black via-blue-900/30 to-black opacity-80" />
-          <div className="absolute inset-0" style={{ transform: `translateY(${scrollY * 0.15}px)` }}>
-            <Canvas>
-              <PerspectiveCamera makeDefault position={[0, 0, 10]} />
-              <ambientLight intensity={0.2} />
-              <pointLight position={[10, 10, 10]} intensity={0.8} />
-              <pointLight position={[-10, -10, -10]} color="#3b82f6" intensity={0.5} />
-              <Suspense fallback={null}>
-                <AnimatedBackground />
-              </Suspense>
-            </Canvas>
-          </div>
         </div>
         
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 grid grid-cols-1 lg:grid-cols-2 gap-12 items-center relative z-10">
@@ -220,16 +112,10 @@ export default function Home() {
             </div>
           </div>
           <div className="h-96 transform transition-all duration-1000" style={{ transform: `translateY(${-scrollY * 0.05}px) scale(${1.2 + scrollY * 0.0005})` }}>
-            <Canvas shadows>
-              <OrbitControls enablePan={false} enableZoom={false} autoRotate autoRotateSpeed={0.5} />
-              <ambientLight intensity={0.5} />
-              <directionalLight position={[10, 10, 1]} intensity={1} castShadow />
-              <spotLight position={[0, 5, 5]} angle={0.15} penumbra={1} intensity={1} castShadow />
-              <Suspense fallback={null}>
-                <RoboticEye />
-              </Suspense>
-              <Environment preset="city" />
-            </Canvas>
+            {/* Placeholder for visual content */}
+            <div className="w-full h-full bg-gradient-to-r from-blue-600 to-purple-600 rounded-xl flex items-center justify-center">
+              <Eye className="w-32 h-32 text-white opacity-50" />
+            </div>
           </div>
         </div>
         
@@ -365,8 +251,6 @@ export default function Home() {
           </div>
         </div>
       </section>
-
-
 
       {/* Pricing Section */}
       <section className="py-24 bg-gradient-to-b from-black via-blue-900/10 to-black" id="pricing">
@@ -619,9 +503,6 @@ export default function Home() {
         </div>
       </section>
       
-      
-     
-      
       {/* Loading Overlay - Hidden after initial loading */}
       <div className={`fixed inset-0 bg-black z-[100] flex items-center justify-center transition-opacity duration-1000 ${isLoaded ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
         <div className="flex flex-col items-center">
@@ -649,8 +530,7 @@ export default function Home() {
         }
       `}</style>
 
-<Footer/>
+      <Footer />
     </div>
-    
   );
 }

@@ -1,7 +1,5 @@
-import React from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { cn } from '../lib/utils';
-import { Navigation } from 'lucide-react';
 import { NAvigation } from '../components/Layout';
 
 

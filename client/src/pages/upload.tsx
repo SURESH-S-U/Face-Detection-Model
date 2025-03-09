@@ -1,4 +1,3 @@
-import { Navigation } from 'lucide-react';
 import React, { useState, useRef } from 'react';
 import { NAvigation } from '../components/Layout';
 
