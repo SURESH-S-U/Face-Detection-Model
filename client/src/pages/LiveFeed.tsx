@@ -16,8 +16,8 @@ export default function LiveFeed() {
   const [error, setError] = useState(null);
   const videoRef = useRef(null);
 
-  // Backend URL - update this to match your backend location
-  const API_BASE_URL = "http://localhost:8001"; // Change this if your API is running elsewhere
+  // Backend URL - updated to port 5000
+  const API_BASE_URL = "http://localhost:5000"; // Updated to port 5000
 
   // Fetch recognition data from backend
   const fetchRecognitionData = async () => {
@@ -51,8 +51,8 @@ export default function LiveFeed() {
   // Setup video stream when camera is toggled or changed
   useEffect(() => {
     if (isOn && videoRef.current) {
-      // Get the video URL
-      const videoUrl = `${API_BASE_URL}/api/video-feed/${selectedCamera}`;
+      // Get the video URL - updated to /video_feed
+      const videoUrl = `${API_BASE_URL}/video_feed`; // Updated to /video_feed
       
       // For MJPEG streams, we need to set the src directly
       videoRef.current.src = videoUrl;
