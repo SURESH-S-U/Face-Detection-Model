@@ -234,7 +234,7 @@ except Exception as e:
 
 # Camera URLs
 camera_urls = [
-    0  # Default webcam
+    "http://192.168.137.208:4747/video"  # Default webcam
 ]
 
 # Desired resolution for processing/display
