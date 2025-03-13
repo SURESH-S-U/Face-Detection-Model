@@ -1,4 +1,4 @@
-from flask import Flask, Response
+from flask import Flask, Response, request
 import cv2
 import threading
 import time
@@ -20,6 +20,9 @@ app = Flask(__name__)
 latest_frame = None
 frame_lock = threading.Lock()
 
+# Global variable to control the main loop
+running = True
+
 def generate_frames():
     global latest_frame
     while True:
@@ -35,6 +38,12 @@ def generate_frames():
 def video_feed():
     return Response(generate_frames(),
                     mimetype='multipart/x-mixed-replace; boundary=frame')
+
+@app.route('/stop', methods=['POST'])
+def stop():
+    global running
+    running = False
+    return "Stopping backend process..."
 
 def start_flask_app():
     app.run(host='0.0.0.0', port=5000, threaded=True)
@@ -66,6 +75,7 @@ class FaceDBLoggerMongoDB:
             
         self.detections_collection = self.db["face_detections"]
         self.stats_collection = self.db["face_stats"]
+        self.total_detections_collection = self.db["total_detections"]  # New collection for total detections
         self.fs = gridfs.GridFS(self.db)  # Initialize GridFS for storing images
         
         # Clear existing data in the collections
@@ -89,6 +99,11 @@ class FaceDBLoggerMongoDB:
             for grid_file in self.fs.find():
                 self.fs.delete(grid_file._id)
             print("Cleared existing files in GridFS.")
+            
+            # Initialize total_detections collection with a single document
+            self.total_detections_collection.delete_many({})
+            self.total_detections_collection.insert_one({"total_detections": 0})
+            print("Initialized total_detections collection.")
         except Exception as e:
             print(f"Error clearing existing data: {e}")
     
@@ -125,6 +140,9 @@ class FaceDBLoggerMongoDB:
             
             # Update stats document for this person
             self._update_stats(name, detection_time)
+            
+            # Update total detections count
+            self._update_total_detections()
         except Exception as e:
             print(f"Error logging detection: {e}")
     
@@ -143,7 +161,6 @@ class FaceDBLoggerMongoDB:
                 self.stats_collection.update_one(
                     stats_query,
                     {
-                        "$inc": {"total_detections": 1},
                         "$set": {"last_detection_time": detection_time}
                     }
                 )
@@ -152,7 +169,6 @@ class FaceDBLoggerMongoDB:
                 new_stats = {
                     "name": name,
                     "roll_number": self._extract_roll_number(name),
-                    "total_detections": 1,
                     "first_detection_time": detection_time,
                     "last_detection_time": detection_time,
                     "dataset_count": 25  # This would need to be updated manually
@@ -160,6 +176,17 @@ class FaceDBLoggerMongoDB:
                 self.stats_collection.insert_one(new_stats)
         except Exception as e:
             print(f"Error updating stats: {e}")
+    
+    def _update_total_detections(self):
+        """Update the total number of detections"""
+        try:
+            self.total_detections_collection.update_one(
+                {},
+                {"$inc": {"total_detections": 1}},
+                upsert=True
+            )
+        except Exception as e:
+            print(f"Error updating total detections: {e}")
     
     def get_detections_in_timerange(self, start_time, end_time):
         """Get count of detections within a time range"""
@@ -360,7 +387,7 @@ def draw_label(img, text, pos, color, scale=0.7, thickness=2):
 
 print("Starting main loop...")
 
-while True:
+while running:
     frames = []
     for i in camera_data:
         data = camera_data[i]
@@ -427,8 +454,12 @@ while True:
         # Show the combined frame with all cameras' outputs side by side
         cv2.imshow('Combined Camera Feed', combined_frame)
 
-    if cv2.waitKey(1) & 0xFF in (ord('q'), 27):
+    # Break the loop if running is False
+    if not running:
         break
+
+    # Add a small delay to avoid high CPU usage
+    time.sleep(0.01)
 
 # Clean up
 for i in camera_data:

@@ -48,6 +48,54 @@ export default function LiveFeed() {
     }
   };
 
+  // Stop the backend process
+  const stopBackendProcess = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/stop`, {
+        method: 'POST',
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Failed to stop backend process: ${response.statusText}`);
+      }
+      
+      console.log("Backend process stopped successfully");
+    } catch (error) {
+      console.error("Error stopping backend process:", error);
+      setError(`Failed to stop backend process: ${error.message}`);
+    }
+  };
+
+  // Start the backend process
+  const startBackendProcess = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/start`, {
+        method: 'POST',
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Failed to start backend process: ${response.statusText}`);
+      }
+      
+      console.log("Backend process started successfully");
+    } catch (error) {
+      console.error("Error starting backend process:", error);
+      setError(`Failed to start backend process: ${error.message}`);
+    }
+  };
+
+  // Handle camera on/off toggle
+  const handleCameraToggle = async () => {
+    if (isOn) {
+      // Stop the backend process when turning off the camera
+      await stopBackendProcess();
+    } else {
+      // Start the backend process when turning on the camera
+      await startBackendProcess();
+    }
+    setIsOn(!isOn);
+  };
+
   // Setup video stream when camera is toggled or changed
   useEffect(() => {
     if (isOn && videoRef.current) {
@@ -132,7 +180,7 @@ export default function LiveFeed() {
                     ))}
                   </select>
                   <button 
-                    onClick={() => setIsOn(!isOn)}
+                    onClick={handleCameraToggle}
                     className={cn(
                       "p-2 rounded-lg",
                       isOn ? "bg-red-100 text-red-600" : "bg-green-100 text-green-600"
