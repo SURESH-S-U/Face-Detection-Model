@@ -86,6 +86,9 @@ sent_faces = set()
 all_known_faces = {}
 all_unknown_faces = {}
 
+# Threshold for face similarity (adjust as needed)
+SIMILARITY_THRESHOLD = 0.7  # Faces with cosine similarity > 0.7 are considered the same person
+
 # Data structures for each camera
 camera_data = {}
 for i, url in enumerate(camera_urls):
@@ -101,6 +104,15 @@ for i, url in enumerate(camera_urls):
         'video': None,
         'running': True
     }
+
+# Function to check if a face is similar to existing unknown faces
+def is_similar_to_existing_unknown_faces(embedding):
+    for face_id, face_data in all_unknown_faces.items():
+        existing_embedding = face_data['embedding']
+        similarity = np.dot(embedding, existing_embedding)
+        if similarity > SIMILARITY_THRESHOLD:
+            return face_id
+    return None
 
 # Face processing thread
 def process_frames(camera_id):
@@ -146,8 +158,14 @@ def process_frames(camera_id):
                         _, buffer = cv.imencode('.jpg', face_image)
                         face_image_base64 = base64.b64encode(buffer).decode('utf-8')
 
-                        # For "Unknown" faces, create a unique identifier based on face image
-                        face_id = matched_name if is_known else f"Unknown_{hash(face_image_base64) % 10000000}"
+                        if is_known:
+                            face_id = matched_name
+                        else:
+                            # Check if this unknown face is similar to any existing unknown face
+                            face_id = is_similar_to_existing_unknown_faces(embedding[0])
+                            if face_id is None:
+                                # If not, create a new unique identifier for this unknown face
+                                face_id = f"Unknown_{hash(tuple(embedding[0])) % 10000000}"
 
                         face_data = {
                             'bbox': bbox,
@@ -156,7 +174,8 @@ def process_frames(camera_id):
                             'color': color,
                             'face_image': face_image_base64,
                             'timestamp': time.strftime("%Y-%m-%d %H:%M:%S"),
-                            'face_id': face_id
+                            'face_id': face_id,
+                            'embedding': embedding[0]  # Store embedding for future comparisons
                         }
                         
                         result['faces'].append(face_data)
@@ -164,18 +183,21 @@ def process_frames(camera_id):
                         # Create MongoDB document
                         face_db_entry = {
                             'face_id': face_id,
-                            '_id': str(hash(face_image_base64)),
+                            '_id': str(hash(tuple(embedding[0]))),
                             'name': matched_name,
                             'timestamp': time.strftime("%Y-%m-%d %H:%M:%S"),
                             'camera_id': camera_id,
-                            'face_image': face_image_base64
+                            'face_image': face_image_base64,
+                            'embedding': embedding[0].tolist()  # Store embedding in MongoDB
                         }
                         
                         # Add face to the appropriate global dictionary for persistent display
                         if is_known:
                             all_known_faces[face_id] = face_db_entry.copy()
                         else:
-                            all_unknown_faces[face_id] = face_db_entry.copy()
+                            # Only add unknown face if it hasn't been added before
+                            if face_id not in all_unknown_faces:
+                                all_unknown_faces[face_id] = face_db_entry.copy()
                         
                         # Store face in MongoDB
                         store_face_in_db(face_db_entry, is_known)
