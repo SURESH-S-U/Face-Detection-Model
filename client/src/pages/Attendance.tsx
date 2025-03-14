@@ -29,7 +29,7 @@ interface QuickStats {
 }
 
 // Default total students
-const TOTAL_STUDENTS = 100;
+const TOTAL_STUDENTS = 10;
 
 const Attendance: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState<string>('');
@@ -71,6 +71,7 @@ const Attendance: React.FC = () => {
   // Convert face data to attendance logs format for display
   const formatFaceData = (faces: FaceData[]) => {
     return faces
+      .filter(face => face.is_known) // Only include known faces
       .filter(face => {
         // If search term is present, filter by name
         if (searchTerm) {
