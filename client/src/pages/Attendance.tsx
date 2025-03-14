@@ -4,7 +4,7 @@ import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import { Calendar, Search, RefreshCw } from 'lucide-react';
 import { NAvigation } from '../components/Layout';
 
-const COLORS = ['#3B82F6', '#F59E0B', '#10B981'];
+const COLORS = ['#3B82F6', '#10B981'];
 
 interface AttendanceData {
   name: string;
@@ -22,20 +22,14 @@ interface FaceData {
 }
 
 interface QuickStats {
-  totalEmployees: number;
+  totalStudents: number;
   presentToday: number;
   lateToday: number;
   onLeave: number;
 }
 
-interface CountData {
-  known_count: number;
-  unknown_count: number;
-  total_count: number;
-}
-
-// Default total employees
-const TOTAL_EMPLOYEES = 100;
+// Default total students
+const TOTAL_STUDENTS = 100;
 
 const Attendance: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState<string>('');
@@ -43,10 +37,10 @@ const Attendance: React.FC = () => {
   const [attendanceData, setAttendanceData] = useState<AttendanceData[]>([]);
   const [faceData, setFaceData] = useState<FaceData[]>([]);
   const [quickStats, setQuickStats] = useState<QuickStats>({
-    totalEmployees: TOTAL_EMPLOYEES,
+    totalStudents: TOTAL_STUDENTS,
     presentToday: 0,
     lateToday: 0,
-    onLeave: TOTAL_EMPLOYEES
+    onLeave: TOTAL_STUDENTS
   });
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
@@ -57,14 +51,12 @@ const Attendance: React.FC = () => {
 
   // Helper function to calculate attendance data from quick stats
   const calculateAttendanceData = (stats: QuickStats): AttendanceData[] => {
-    // Calculate percentages based on the stats
-    const onTimePercentage = Math.round((stats.presentToday / stats.totalEmployees) * 100) || 0;
-    const latePercentage = Math.round((stats.lateToday / stats.totalEmployees) * 100) || 0;
-    const absentPercentage = 100 - onTimePercentage - latePercentage;
+    // Calculate percentages based on the stats - removed late percentage
+    const onTimePercentage = Math.round((stats.presentToday / stats.totalStudents) * 100) || 0;
+    const absentPercentage = 100 - onTimePercentage;
     
     return [
-      { name: 'On Time', value: onTimePercentage },
-      { name: 'Late', value: latePercentage },
+      { name: 'Present', value: onTimePercentage },
       { name: 'Absent', value: absentPercentage },
     ];
   };
@@ -158,10 +150,10 @@ const Attendance: React.FC = () => {
       
       // Update quick stats based on count data
       const updatedStats: QuickStats = {
-        totalEmployees: TOTAL_EMPLOYEES,
+        totalStudents: TOTAL_STUDENTS,
         presentToday: countData.known_count,
-        lateToday: 0, // We don't track late employees in this system
-        onLeave: TOTAL_EMPLOYEES - countData.known_count
+        lateToday: 0, // We don't track late students in this system
+        onLeave: TOTAL_STUDENTS - countData.known_count
       };
       
       setQuickStats(updatedStats);
@@ -204,10 +196,10 @@ const Attendance: React.FC = () => {
     
     // Update quick stats based on filtered data
     const updatedStats: QuickStats = {
-      totalEmployees: TOTAL_EMPLOYEES,
+      totalStudents: TOTAL_STUDENTS,
       presentToday: knownCount,
       lateToday: 0,
-      onLeave: TOTAL_EMPLOYEES - knownCount
+      onLeave: TOTAL_STUDENTS - knownCount
     };
     
     setQuickStats(updatedStats);
@@ -242,7 +234,7 @@ const Attendance: React.FC = () => {
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
               <input
                 type="text"
-                placeholder="Search employees..."
+                placeholder="Search students..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 className="pl-10 pr-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -295,7 +287,7 @@ const Attendance: React.FC = () => {
                     </PieChart>
                   </ResponsiveContainer>
                 </div>
-                <div className="grid grid-cols-3 gap-4 mt-6">
+                <div className="grid grid-cols-2 gap-4 mt-6">
                   {attendanceData.map((item, index) => (
                     <div key={item.name} className="text-center">
                       <div className="text-2xl font-bold" style={{ color: COLORS[index] }}>
@@ -311,10 +303,9 @@ const Attendance: React.FC = () => {
                 <h2 className="text-xl font-bold mb-6">Quick Stats</h2>
                 <div className="grid grid-cols-2 gap-6">
                   {[
-                    { label: 'Total Employees', value: quickStats.totalEmployees.toString() },
+                    { label: 'Total Students', value: quickStats.totalStudents.toString() },
                     { label: 'Present Today', value: quickStats.presentToday.toString() },
-                    { label: 'Late Today', value: quickStats.lateToday.toString() },
-                    { label: 'On Leave', value: quickStats.onLeave.toString() }
+                    { label: 'Absent Today', value: quickStats.onLeave.toString() }
                   ].map((stat, index) => (
                     <div key={index} className="bg-gray-50 p-4 rounded-lg">
                       <div className="text-2xl font-bold text-blue-600">{stat.value}</div>
@@ -325,8 +316,8 @@ const Attendance: React.FC = () => {
                 <div className="mt-6">
                   <h3 className="font-semibold mb-2">Today: {format(new Date(selectedDate), 'MMMM dd, yyyy')}</h3>
                   <p className="text-gray-600">
-                    Out of {quickStats.totalEmployees} employees, {quickStats.presentToday} are present today.
-                    {quickStats.onLeave > 0 && ` ${quickStats.onLeave} employees are on leave.`}
+                    Out of {quickStats.totalStudents} students, {quickStats.presentToday} are present today.
+                    {quickStats.onLeave > 0 && ` ${quickStats.onLeave} students are absent.`}
                   </p>
                 </div>
               </div>
@@ -369,7 +360,7 @@ const Attendance: React.FC = () => {
                                 <img
                                   src={`data:image/jpeg;base64,${face.face_image}`}
                                   alt={face.name}
-                                  className="w-10 h-10 rounded-full object-cover"
+                                  className="w-10 h-10rounded-full object-cover"
                                 />
                                 <span className="font-medium">{face.name}</span>
                               </div>
@@ -396,5 +387,11 @@ const Attendance: React.FC = () => {
     </div>
   );
 };
+
+interface CountData {
+  known_count: number;
+  unknown_count: number;
+  total_count: number;
+}
 
 export default Attendance;
