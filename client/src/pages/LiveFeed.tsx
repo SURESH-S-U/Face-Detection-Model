@@ -16,8 +16,8 @@ export default function LiveFeed() {
   const [error, setError] = useState(null);
   const videoRef = useRef(null);
 
-  // Backend URL - updated to port 5000
-  const API_BASE_URL = "http://localhost:5000"; // Updated to port 5000
+  // Backend URL - using port 5000
+  const API_BASE_URL = "http://localhost:5000";
 
   // Fetch recognition data from backend
   const fetchRecognitionData = async () => {
@@ -27,19 +27,52 @@ export default function LiveFeed() {
     setError(null);
     
     try {
-      const response = await fetch(`${API_BASE_URL}/api/recognition?cameraId=${selectedCamera}`);
+      console.log("Attempting to fetch data from:", `${API_BASE_URL}/detection_data`);
+      
+      const response = await fetch(`${API_BASE_URL}/detection_data`, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json',
+        },
+        mode: 'cors',
+      });
+      
+      console.log("Response status:", response.status);
       
       if (!response.ok) {
         throw new Error(`API error: ${response.status} ${response.statusText}`);
       }
       
       const data = await response.json();
+      console.log("Recognition data received:", data);
       
-      // Update state with the fetched data
-      setKnownUsers(data.knownUsers || []);
-      setUnknownUsers(data.unknownUsers || []);
-      
-      console.log("Recognition data fetched successfully:", data);
+      if (Array.isArray(data)) {
+        // Process the detections and separate known and unknown users
+        const known = [];
+        const unknown = [];
+        
+        data.forEach((detection, index) => {
+          const userObject = {
+            id: detection._id || `unknown-${index}`,
+            name: detection.name || "Unknown",
+            time: detection.timestamp || new Date().toISOString(),
+            camera: `Camera ${detection.camera_id !== undefined ? detection.camera_id : 0}`,
+            // Make sure face_image is properly handled
+            image: detection.face_image ? `data:image/jpeg;base64,${detection.face_image}` : null,
+          };
+          
+          if (detection.name && detection.name !== "Unknown") {
+            known.push(userObject);
+          } else {
+            unknown.push(userObject);
+          }
+        });
+        
+        setKnownUsers(known);
+        setUnknownUsers(unknown);
+      } else {
+        console.error("Unexpected data format:", data);
+      }
     } catch (error) {
       console.error("Error fetching recognition data:", error);
       setError(`Failed to fetch recognition data: ${error.message}`);
@@ -66,32 +99,11 @@ export default function LiveFeed() {
     }
   };
 
-  // Start the backend process
-  const startBackendProcess = async () => {
-    try {
-      const response = await fetch(`${API_BASE_URL}/start`, {
-        method: 'POST',
-      });
-      
-      if (!response.ok) {
-        throw new Error(`Failed to start backend process: ${response.statusText}`);
-      }
-      
-      console.log("Backend process started successfully");
-    } catch (error) {
-      console.error("Error starting backend process:", error);
-      setError(`Failed to start backend process: ${error.message}`);
-    }
-  };
-
   // Handle camera on/off toggle
   const handleCameraToggle = async () => {
     if (isOn) {
       // Stop the backend process when turning off the camera
       await stopBackendProcess();
-    } else {
-      // Start the backend process when turning on the camera
-      await startBackendProcess();
     }
     setIsOn(!isOn);
   };
@@ -99,8 +111,8 @@ export default function LiveFeed() {
   // Setup video stream when camera is toggled or changed
   useEffect(() => {
     if (isOn && videoRef.current) {
-      // Get the video URL - updated to /video_feed
-      const videoUrl = `${API_BASE_URL}/video_feed`; // Updated to /video_feed
+      // Get the video URL - using /video_feed
+      const videoUrl = `${API_BASE_URL}/video_feed`;
       
       // For MJPEG streams, we need to set the src directly
       videoRef.current.src = videoUrl;
@@ -121,7 +133,7 @@ export default function LiveFeed() {
         }
       };
     }
-  }, [isOn, selectedCamera, API_BASE_URL]);
+  }, [isOn, selectedCamera]);
 
   // Handle camera on/off toggle for recognition data
   useEffect(() => {
@@ -142,20 +154,35 @@ export default function LiveFeed() {
     try {
       if (!dateTimeStr) return "";
       
-      // Extract time part from the datetime string (assuming format like "2023-01-01 14:30:00")
-      const timePart = dateTimeStr.split(' ')[1];
-      if (!timePart) return dateTimeStr;
+      // Extract time part from the datetime string
+      // Handle multiple possible formats
+      let timePart;
+      if (dateTimeStr.includes(' ')) {
+        // Format: "2023-01-01 14:30:00"
+        timePart = dateTimeStr.split(' ')[1];
+      } else if (dateTimeStr.includes('T')) {
+        // Format: "2023-01-01T14:30:00"
+        timePart = dateTimeStr.split('T')[1].split('.')[0];
+      } else {
+        return dateTimeStr;
+      }
       
-      // Convert to 12-hour format with AM/PM
+      // Extract hours and minutes
       const [hours, minutes] = timePart.split(':');
       const hoursNum = parseInt(hours);
       const amPm = hoursNum >= 12 ? 'PM' : 'AM';
       const hours12 = hoursNum % 12 || 12;
       return `${hours12}:${minutes} ${amPm}`;
     } catch (e) {
-      console.error("Error formatting time:", e);
-      return dateTimeStr;
+      console.error("Error formatting time:", e, dateTimeStr);
+      return dateTimeStr || "N/A";
     }
+  };
+
+  // Debug function to log and check details
+  const debugImageUrl = (imageUrl) => {
+    console.log("Image URL:", imageUrl);
+    return imageUrl || "/api/placeholder/100/100";
   };
 
   return (
@@ -229,14 +256,21 @@ export default function LiveFeed() {
                 ) : knownUsers.length > 0 ? (
                   knownUsers.map(user => (
                     <div key={user.id} className="flex items-center gap-4 p-3 bg-gray-50 rounded-lg">
-                      <img 
-                        src={user.image || "/api/placeholder/100/100"} 
-                        alt={user.name} 
-                        className="w-12 h-12 rounded-full object-cover" 
-                        onError={(e) => {
-                          e.target.src = "/api/placeholder/100/100";
-                        }}
-                      />
+                      {user.image ? (
+                        <img 
+                          src={user.image}
+                          alt={user.name} 
+                          className="w-12 h-12 rounded-full object-cover" 
+                          onError={(e) => {
+                            console.error("Image load error:", e);
+                            e.target.src = "/api/placeholder/100/100";
+                          }}
+                        />
+                      ) : (
+                        <div className="w-12 h-12 rounded-full bg-gray-300 flex items-center justify-center">
+                          <Users className="w-6 h-6 text-gray-500" />
+                        </div>
+                      )}
                       <div className="flex-1">
                         <h3 className="font-medium">{user.name}</h3>
                         <p className="text-sm text-gray-500">{formatTime(user.time)} - {user.camera}</p>
@@ -263,14 +297,21 @@ export default function LiveFeed() {
                 ) : unknownUsers.length > 0 ? (
                   unknownUsers.map(user => (
                     <div key={user.id} className="flex items-center gap-4 p-3 bg-gray-50 rounded-lg">
-                      <img 
-                        src={user.image || "/api/placeholder/100/100"} 
-                        alt="Unknown person" 
-                        className="w-12 h-12 rounded-full object-cover"
-                        onError={(e) => {
-                          e.target.src = "/api/placeholder/100/100";
-                        }}
-                      />
+                      {user.image ? (
+                        <img 
+                          src={user.image}
+                          alt="Unknown person" 
+                          className="w-12 h-12 rounded-full object-cover"
+                          onError={(e) => {
+                            console.error("Image load error:", e);
+                            e.target.src = "/api/placeholder/100/100";
+                          }}
+                        />
+                      ) : (
+                        <div className="w-12 h-12 rounded-full bg-gray-300 flex items-center justify-center">
+                          <AlertCircle className="w-6 h-6 text-gray-500" />
+                        </div>
+                      )}
                       <div className="flex-1">
                         <h3 className="font-medium">Unknown Person</h3>
                         <p className="text-sm text-gray-500">{formatTime(user.time)} - {user.camera}</p>

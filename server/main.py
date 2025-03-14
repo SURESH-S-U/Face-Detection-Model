@@ -1,272 +1,90 @@
-from flask import Flask, Response, request
-import cv2
-import threading
-import time
+from flask import Flask, Response, jsonify
+from flask_cors import CORS
+import cv2 as cv
 import numpy as np
 import insightface
 import faiss
 import pickle
-from datetime import datetime
-import pymongo
-from pymongo import MongoClient
-import gridfs
-import ssl
+import time
+import threading
 from queue import Queue
+import base64
+from pymongo import MongoClient
 
-# Initialize Flask app for streaming
 app = Flask(__name__)
+CORS(app)
 
-# Global variable to store the latest frame
-latest_frame = None
-frame_lock = threading.Lock()
-
-# Global variable to control the main loop
-running = True
-
-def generate_frames():
-    global latest_frame
-    while True:
-        with frame_lock:
-            if latest_frame is None:
-                continue
-            ret, buffer = cv2.imencode('.jpg', latest_frame)
-            frame = buffer.tobytes()
-        yield (b'--frame\r\n'
-               b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
-
-@app.route('/video_feed')
-def video_feed():
-    return Response(generate_frames(),
-                    mimetype='multipart/x-mixed-replace; boundary=frame')
-
-@app.route('/stop', methods=['POST'])
-def stop():
-    global running
-    running = False
-    return "Stopping backend process..."
-
-def start_flask_app():
-    app.run(host='0.0.0.0', port=5000, threaded=True)
-
-# Start Flask app in a separate thread
-flask_thread = threading.Thread(target=start_flask_app)
-flask_thread.daemon = True
-flask_thread.start()
-
-# Rest of your existing code (face detection logic)
-def get_mongodb_connection():
-    try:
-        connection_string = "mongodb+srv://sureshelite07:xnwMuZHq04ipgHpm@cluster0.gsjwi.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0&tlsInsecure=true"
-        client = MongoClient(connection_string)
-        print("MongoDB connection successful!")
-        db = client["face_detection_db"]
-        return db
-    except Exception as e:
-        print(f"MongoDB Connection Error: {e}")
-        return None
-
-# FaceDB Logger for MongoDB
-class FaceDBLoggerMongoDB:
-    def __init__(self):
-        self.db = get_mongodb_connection()
-        if self.db is None:
-            print("WARNING: MongoDB connection failed, detection logging disabled")
-            return
-            
-        self.detections_collection = self.db["face_detections"]
-        self.stats_collection = self.db["face_stats"]
-        self.total_detections_collection = self.db["total_detections"]  # New collection for total detections
-        self.fs = gridfs.GridFS(self.db)  # Initialize GridFS for storing images
-        
-        # Clear existing data in the collections
-        self.clear_existing_data()
-        
-        # Set to track logged persons
-        self.logged_persons = set()
-    
-    def clear_existing_data(self):
-        """Clear existing data in the face_detections and face_stats collections"""
-        try:
-            # Delete all documents in the face_detections collection
-            self.detections_collection.delete_many({})
-            print("Cleared existing data in face_detections collection.")
-            
-            # Delete all documents in the face_stats collection
-            self.stats_collection.delete_many({})
-            print("Cleared existing data in face_stats collection.")
-            
-            # Delete all files in GridFS (if any)
-            for grid_file in self.fs.find():
-                self.fs.delete(grid_file._id)
-            print("Cleared existing files in GridFS.")
-            
-            # Initialize total_detections collection with a single document
-            self.total_detections_collection.delete_many({})
-            self.total_detections_collection.insert_one({"total_detections": 0})
-            print("Initialized total_detections collection.")
-        except Exception as e:
-            print(f"Error clearing existing data: {e}")
-    
-    def log_detection(self, name, confidence, camera_id, face_image=None):
-        """Log a face detection to MongoDB"""
-        if self.db is None:
-            return
-            
-        try:
-            # Skip logging if the person has already been logged
-            if name in self.logged_persons:
-                print(f"Person {name} already logged. Skipping...")
-                return
-            
-            detection_time = datetime.now()
-            detection_doc = {
-                "name": name,
-                "roll_number": self._extract_roll_number(name),
-                "confidence": confidence,
-                "camera_id": camera_id,
-                "timestamp": detection_time
-            }
-            
-            # Store the face image in GridFS if provided
-            if face_image is not None:
-                face_image_id = self.fs.put(face_image.tobytes(), filename=f"{name}_{detection_time}.jpg")
-                detection_doc["face_image_id"] = face_image_id
-            
-            self.detections_collection.insert_one(detection_doc)
-            print(f"Logged detection: {name} with confidence {confidence:.2f}")
-            
-            # Add the person to the logged_persons set
-            self.logged_persons.add(name)
-            
-            # Update stats document for this person
-            self._update_stats(name, detection_time)
-            
-            # Update total detections count
-            self._update_total_detections()
-        except Exception as e:
-            print(f"Error logging detection: {e}")
-    
-    def _extract_roll_number(self, name):
-        """Extract roll number from name if available"""
-        return name
-    
-    def _update_stats(self, name, detection_time):
-        """Update statistics for this person"""
-        try:
-            stats_query = {"name": name}
-            stats_doc = self.stats_collection.find_one(stats_query)
-            
-            if stats_doc:
-                # Update existing stats
-                self.stats_collection.update_one(
-                    stats_query,
-                    {
-                        "$set": {"last_detection_time": detection_time}
-                    }
-                )
-            else:
-                # Create new stats document
-                new_stats = {
-                    "name": name,
-                    "roll_number": self._extract_roll_number(name),
-                    "first_detection_time": detection_time,
-                    "last_detection_time": detection_time,
-                    "dataset_count": 25  # This would need to be updated manually
-                }
-                self.stats_collection.insert_one(new_stats)
-        except Exception as e:
-            print(f"Error updating stats: {e}")
-    
-    def _update_total_detections(self):
-        """Update the total number of detections"""
-        try:
-            self.total_detections_collection.update_one(
-                {},
-                {"$inc": {"total_detections": 1}},
-                upsert=True
-            )
-        except Exception as e:
-            print(f"Error updating total detections: {e}")
-    
-    def get_detections_in_timerange(self, start_time, end_time):
-        """Get count of detections within a time range"""
-        if self.db is None:
-            return 0
-            
-        query = {
-            "timestamp": {
-                "$gte": start_time,
-                "$lte": end_time
-            }
-        }
-        return self.detections_collection.count_documents(query)
-    
-    def get_detections_after_time(self, time_point):
-        """Get count of detections after a specific time"""
-        if self.db is None:
-            return 0
-            
-        query = {
-            "timestamp": {
-                "$gt": time_point
-            }
-        }
-        return self.detections_collection.count_documents(query)
-    
-    def update_dataset_count(self, name, count):
-        """Update the count of datasets provided for this person"""
-        if self.db is None:
-            return
-            
-        stats_query = {"name": name}
-        self.stats_collection.update_one(
-            stats_query,
-            {"$set": {"dataset_count": count}},
-            upsert=True
-        )
-
-# Initialize InsightFace model with explicit GPU context
-try:
-    model = insightface.app.FaceAnalysis(name='buffalo_l', providers=['CUDAExecutionProvider'])
-    model.prepare(ctx_id=0, det_size=(640, 640))
-    print("InsightFace model initialized successfully")
-except Exception as e:
-    print(f"Error initializing InsightFace model: {e}")
-    model = None
-    exit(1)
-
-# Initialize MongoDB database
-database = FaceDBLoggerMongoDB()
+# Initialize InsightFace model
+model = insightface.app.FaceAnalysis(name='buffalo_l', providers=['CUDAExecutionProvider'])
+model.prepare(ctx_id=0, det_size=(640, 640))
 
 # Load embeddings and labels
-try:
-    with open('labels.pkl', 'rb') as f:
-        data = pickle.load(f)
-    
-    Y = data['labels']
-    print(f"Loaded {len(Y)} face labels")
-except Exception as e:
-    print(f"Error loading face labels: {e}")
-    Y = []
-    exit(1)
+with open('labels.pkl', 'rb') as f:
+    data = pickle.load(f)
+
+Y = data['labels']
 
 # Setup FAISS IndexFlatIP
-try:
-    index = faiss.read_index('face_index.faiss')
-    print(f"FAISS index loaded with {index.ntotal} vectors")
-except Exception as e:
-    print(f"Error loading FAISS index: {e}")
-    index = None
-    exit(1)
+index = faiss.read_index('face_index.faiss')
+
+# MongoDB connection
+mongo_client = MongoClient("mongodb+srv://sureshelite07:6NtP2zHJyxUJGrWy@cluster0.sc6f8.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
+db = mongo_client["face_recognition_db"]
+known_faces_collection = db["known_faces"]
+unknown_faces_collection = db["unknown_faces"]
+stats_collection = db["detection_stats"]
+
+# Clear all existing data in collections when starting the application
+known_faces_collection.delete_many({})
+unknown_faces_collection.delete_many({})
+stats_collection.delete_many({})
+
+# Initialize stats document
+stats_collection.insert_one({
+    "_id": "face_counter", 
+    "known_count": 0,
+    "unknown_count": 0
+})
+
+# Function to store face data in MongoDB
+def store_face_in_db(face_data, is_known):
+    face_id = face_data["face_id"]
+    collection = known_faces_collection if is_known else unknown_faces_collection
+    
+    # Check if the face already exists in MongoDB (using face_id)
+    existing_face = collection.find_one({"face_id": face_id})
+    
+    if not existing_face:
+        # Insert the new face
+        collection.insert_one(face_data)
+        
+        # Update the appropriate counter
+        if is_known:
+            stats_collection.update_one(
+                {"_id": "face_counter"},
+                {"$inc": {"known_count": 1}}
+            )
+        else:
+            stats_collection.update_one(
+                {"_id": "face_counter"},
+                {"$inc": {"unknown_count": 1}}
+            )
 
 # Camera URLs
 camera_urls = [
-    "http://192.168.137.208:4747/video"  # Default webcam
+    0
 ]
 
 # Desired resolution for processing/display
 desired_width = 640
 desired_height = 480
+
+# Global set to track faces that have already been sent to frontend
+sent_faces = set()
+
+# Global dictionaries to store all detected faces for persistent display
+all_known_faces = {}
+all_unknown_faces = {}
 
 # Data structures for each camera
 camera_data = {}
@@ -287,36 +105,29 @@ for i, url in enumerate(camera_urls):
 # Face processing thread
 def process_frames(camera_id):
     data = camera_data[camera_id]
-    result_queue = data['result_queue']  # Get the camera-specific result queue
+    result_queue = data['result_queue']
     while data['running']:
         try:
             frame = data['frame_queue'].get(timeout=0.3)
 
             # Resize frame to desired resolution for processing
-            resized_frame = cv2.resize(frame, (desired_width, desired_height))
+            resized_frame = cv.resize(frame, (desired_width, desired_height))
 
             result = {
                 'faces': [],
                 'frame_time': time.time()
             }
 
-            # Get face detections from the model
-            faces = model.get(resized_frame)  # Use resized_frame for face detection
-            
+            faces = model.get(resized_frame)
+
             if faces:
-                print(f"Detected {len(faces)} faces in camera {camera_id}")
                 embeddings = []
                 face_data = []
 
                 for face in faces:
                     bbox = face.bbox.astype(int)
-                    embedding = face.embedding
-                    
-                    if embedding is None:
-                        continue
-                        
-                    embedding = embedding.astype(np.float32).reshape(1, -1)
-                    embedding /= np.linalg.norm(embedding)  # Ensure normalized (cosine/IP fix)
+                    embedding = face.embedding.astype(np.float32).reshape(1, -1)
+                    embedding /= np.linalg.norm(embedding)
 
                     embeddings.append(embedding[0])
                     face_data.append((face, bbox))
@@ -325,152 +136,214 @@ def process_frames(camera_id):
                     embeddings = np.array(embeddings, dtype=np.float32)
                     distances, indices = index.search(embeddings, k=1)
 
-                    for i, ((face, bbox), distance, idx) in enumerate(zip(face_data, distances, indices)):
-                        # Use a confidence threshold that makes sense for your model
-                        confidence_threshold = 0.5
-                        
-                        # The distance might need to be converted to a similarity score
-                        # For inner product similarity, higher is better
-                        similarity = float(distance[0])
-                        
-                        matched_name = Y[idx[0]] if similarity > confidence_threshold else "Unknown"
-                        color = (0, 255, 0) if matched_name != "Unknown" else (0, 0, 255)
+                    for (face, bbox), distance, idx in zip(face_data, distances, indices):
+                        matched_name = Y[idx[0]] if distance[0] > 0.5 else "Unknown"
+                        is_known = matched_name != "Unknown"
+                        color = (0, 255, 0) if is_known else (0, 0, 255)
 
-                        print(f"Face {i+1}: Name={matched_name}, Similarity={similarity:.2f}")
+                        # Encode the face image to base64
+                        face_image = resized_frame[bbox[1]:bbox[3], bbox[0]:bbox[2]]
+                        _, buffer = cv.imencode('.jpg', face_image)
+                        face_image_base64 = base64.b64encode(buffer).decode('utf-8')
 
-                        result['faces'].append({
+                        # For "Unknown" faces, create a unique identifier based on face image
+                        face_id = matched_name if is_known else f"Unknown_{hash(face_image_base64) % 10000000}"
+
+                        face_data = {
                             'bbox': bbox,
-                            'distance': similarity,
+                            'distance': distance[0],
                             'name': matched_name,
-                            'color': color
-                        })
+                            'color': color,
+                            'face_image': face_image_base64,
+                            'timestamp': time.strftime("%Y-%m-%d %H:%M:%S"),
+                            'face_id': face_id
+                        }
                         
-                        # Log the detection if confidence is high enough and not Unknown
-                        if similarity > confidence_threshold and matched_name != "Unknown":
-                            # Extract the face image from the frame
-                            face_image = resized_frame[bbox[1]:bbox[3], bbox[0]:bbox[2]]
-                            face_image = cv2.cvtColor(face_image, cv2.COLOR_BGR2RGB)
-                            
-                            print(f"Logging detection for {matched_name}")
-                            database.log_detection(matched_name, similarity, camera_id, face_image)
+                        result['faces'].append(face_data)
+                        
+                        # Create MongoDB document
+                        face_db_entry = {
+                            'face_id': face_id,
+                            '_id': str(hash(face_image_base64)),
+                            'name': matched_name,
+                            'timestamp': time.strftime("%Y-%m-%d %H:%M:%S"),
+                            'camera_id': camera_id,
+                            'face_image': face_image_base64
+                        }
+                        
+                        # Add face to the appropriate global dictionary for persistent display
+                        if is_known:
+                            all_known_faces[face_id] = face_db_entry.copy()
+                        else:
+                            all_unknown_faces[face_id] = face_db_entry.copy()
+                        
+                        # Store face in MongoDB
+                        store_face_in_db(face_db_entry, is_known)
 
             result_queue.put(result)
             data['frame_queue'].task_done()
 
         except Exception as e:
             print(f"Camera {camera_id} Processing error: {e}")
-            import traceback
-            traceback.print_exc()
 
 # Initialize and start threads
 threads = []
 for i in camera_data:
     thread = threading.Thread(target=process_frames, args=(i,), daemon=True)
     threads.append(thread)
-    camera_data[i]['running'] = True  # Ensure the running flag is set before starting
+    camera_data[i]['running'] = True
     thread.start()
 
 # Video capture setup
 for i, url in enumerate(camera_urls):
     data = camera_data[i]
-    data['video'] = cv2.VideoCapture(url)
-    if not data['video'].isOpened():
-        print(f"Failed to open camera {i} with URL {url}")
-    else:
-        print(f"Successfully opened camera {i}")
+    data['video'] = cv.VideoCapture(url)
 
 # Helper function to draw labels on the frame
 def draw_label(img, text, pos, color, scale=0.7, thickness=2):
-    """Improved text rendering for readability."""
-    cv2.putText(img, text, pos, cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), thickness * 3)
-    cv2.putText(img, text, pos, cv2.FONT_HERSHEY_SIMPLEX, scale, color, thickness)
+    cv.putText(img, text, pos, cv.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), thickness * 3)
+    cv.putText(img, text, pos, cv.FONT_HERSHEY_SIMPLEX, scale, color, thickness)
 
-print("Starting main loop...")
-
-while running:
-    frames = []
-    for i in camera_data:
-        data = camera_data[i]
-        ret, frame = data['video'].read()
+def generate_frames(camera_id):
+    while camera_data[camera_id]['running']:
+        ret, frame = camera_data[camera_id]['video'].read()
         if not ret:
-            print(f"Failed to read frame from camera {i}")
-            data['running'] = False
-            continue
+            break
 
-        # Resize frame to desired resolution for display
-        resized_frame = cv2.resize(frame, (desired_width, desired_height))
+        resized_frame = cv.resize(frame, (desired_width, desired_height))
 
         current_time = time.time()
 
-        # FPS - Display
-        data['frame_times'].append(current_time)
-        data['frame_times'] = [t for t in data['frame_times'] if t > current_time - 1]
-        data['display_fps'] = len(data['frame_times'])
+        camera_data[camera_id]['frame_times'].append(current_time)
+        camera_data[camera_id]['frame_times'] = [t for t in camera_data[camera_id]['frame_times'] if t > current_time - 1]
+        camera_data[camera_id]['display_fps'] = len(camera_data[camera_id]['frame_times'])
 
-        if not data['frame_queue'].full():
-            data['frame_queue'].put(frame.copy())  # Put the original frame, not resized
+        if not camera_data[camera_id]['frame_queue'].full():
+            camera_data[camera_id]['frame_queue'].put(frame.copy())
 
-        # Retrieve latest result if available
-        while not data['result_queue'].empty():
-            data['last_result'] = data['result_queue'].get()
-            data['last_result_time'] = current_time
+        while not camera_data[camera_id]['result_queue'].empty():
+            camera_data[camera_id]['last_result'] = camera_data[camera_id]['result_queue'].get()
+            camera_data[camera_id]['last_result_time'] = current_time
 
-        # Draw latest face results (if recent)
-        if data['last_result'] and current_time - data['last_result_time'] < 0.5:
-            data['processing_times'].append(data['last_result']['frame_time'])
-            data['processing_times'] = [t for t in data['processing_times'] if t > current_time - 1]
-            data['processing_fps'] = len(data['processing_times'])
+        if camera_data[camera_id]['last_result'] and current_time - camera_data[camera_id]['last_result_time'] < 0.5:
+            camera_data[camera_id]['processing_times'].append(camera_data[camera_id]['last_result']['frame_time'])
+            camera_data[camera_id]['processing_times'] = [t for t in camera_data[camera_id]['processing_times'] if t > current_time - 1]
+            camera_data[camera_id]['processing_fps'] = len(camera_data[camera_id]['processing_times'])
 
-            for face in data['last_result']['faces']:
+            for face in camera_data[camera_id]['last_result']['faces']:
                 bbox = face['bbox']
                 name = face['name']
                 distance = face['distance']
                 color = face['color']
 
-                cv2.rectangle(resized_frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), color, 2)
+                cv.rectangle(resized_frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), color, 2)
 
                 label = f"{name} ({distance:.2f})"
                 draw_label(resized_frame, label, (bbox[0], bbox[1] - 10), color)
 
-        # Display FPS overlay
-        fps_text = f"Cam {i} Display FPS: {data['display_fps']} | Processing FPS: {data['processing_fps']}"
+        # Get current face count from MongoDB
+        counter_doc = stats_collection.find_one({"_id": "face_counter"})
+        known_count = counter_doc.get("known_count", 0) if counter_doc else 0
+        unknown_count = counter_doc.get("unknown_count", 0) if counter_doc else 0
+        
+        fps_text = f"Cam {camera_id} Display FPS: {camera_data[camera_id]['display_fps']} | Processing FPS: {camera_data[camera_id]['processing_fps']}"
         draw_label(resized_frame, fps_text, (10, 30), (0, 255, 0))
+        
+        # Display face counts
+        known_text = f"Known Faces: {known_count}"
+        unknown_text = f"Unknown Faces: {unknown_count}"
+        draw_label(resized_frame, known_text, (10, 60), (0, 255, 0))
+        draw_label(resized_frame, unknown_text, (10, 90), (0, 0, 255))
 
-        # Update the latest_frame for streaming
-        with frame_lock:
-            latest_frame = resized_frame
+        ret, buffer = cv.imencode('.jpg', resized_frame)
+        frame = buffer.tobytes()
+        yield (b'--frame\r\n'
+               b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
 
-        frames.append(resized_frame)
+@app.route('/video_feed')
+def video_feed():
+    return Response(generate_frames(0),
+                  mimetype='multipart/x-mixed-replace; boundary=frame')
 
-    # Concatenate frames horizontally to display side by side
-    if frames:
-        if len(frames) == 4:
-            c1 = np.hstack((frames[0], frames[1]))
-            c2 = np.hstack((frames[2], frames[3]))
-            combined_frame = np.vstack((c1, c2))
-        else:
-            combined_frame = np.hstack(frames)
+@app.route('/detection_data')
+def detection_data():
+    # Combine known and unknown faces but mark them accordingly
+    all_faces = []
+    
+    for face_id, face_data in all_known_faces.items():
+        face_data['is_known'] = True
+        all_faces.append(face_data)
+        if face_id not in sent_faces:
+            sent_faces.add(face_id)
+    
+    for face_id, face_data in all_unknown_faces.items():
+        face_data['is_known'] = False
+        all_faces.append(face_data)
+        if face_id not in sent_faces:
+            sent_faces.add(face_id)
+    
+    return jsonify(all_faces)
 
-        # Show the combined frame with all cameras' outputs side by side
-        cv2.imshow('Combined Camera Feed', combined_frame)
+@app.route('/known_faces')
+def known_faces():
+    known_faces_list = list(all_known_faces.values())
+    return jsonify(known_faces_list)
 
-    # Break the loop if running is False
-    if not running:
-        break
+@app.route('/unknown_faces')
+def unknown_faces():
+    unknown_faces_list = list(all_unknown_faces.values())
+    return jsonify(unknown_faces_list)
 
-    # Add a small delay to avoid high CPU usage
-    time.sleep(0.01)
+@app.route('/face_count')
+def face_count():
+    # Get the current counts from MongoDB
+    counter_doc = stats_collection.find_one({"_id": "face_counter"})
+    
+    if counter_doc:
+        known_count = counter_doc.get("known_count", 0)
+        unknown_count = counter_doc.get("unknown_count", 0)
+    else:
+        known_count = 0
+        unknown_count = 0
+    
+    return jsonify({
+        "known_count": known_count,
+        "unknown_count": unknown_count,
+        "total_count": known_count + unknown_count
+    })
 
-# Clean up
-for i in camera_data:
-    camera_data[i]['running'] = False
+@app.route('/reset_faces', methods=['POST'])
+def reset_faces():
+    global sent_faces
+    global all_known_faces
+    global all_unknown_faces
+    
+    sent_faces.clear()
+    all_known_faces.clear()
+    all_unknown_faces.clear()
+    
+    # Reset MongoDB collections
+    known_faces_collection.delete_many({})
+    unknown_faces_collection.delete_many({})
+    stats_collection.update_one(
+        {"_id": "face_counter"},
+        {"$set": {"known_count": 0, "unknown_count": 0}}
+    )
+    
+    return jsonify({
+        "status": "reset successful", 
+        "known_count": 0,
+        "unknown_count": 0,
+        "message": "All detected faces have been cleared from memory and database"
+    })
 
-for thread in threads:
-    thread.join(timeout=1.0)
+@app.route('/stop', methods=['POST'])
+def stop():
+    for camera_id in camera_data:
+        camera_data[camera_id]['running'] = False
+        if camera_data[camera_id]['video']:
+            camera_data[camera_id]['video'].release()
+    return jsonify({"status": "stopped"})
 
-for i in camera_data:
-    data = camera_data[i]
-    if data['video']:
-        data['video'].release()
-
-cv2.destroyAllWindows()
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
